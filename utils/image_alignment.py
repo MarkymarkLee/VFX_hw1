@@ -2,201 +2,154 @@ import numpy as np
 import cv2
 
 
-def create_median_threshold_bitmap(image, exclude_bits=0):
+def align_MTB(images, max_shift=64, noise_threshold=4):
     """
-    Create a median threshold bitmap from a grayscale image.
+    Aligns a list of images using the Median Threshold Bitmap (MTB) algorithm.
 
-    Args:
-        image: Grayscale image as numpy array
-        exclude_bits: Number of least significant bits to exclude to reduce noise
+    Parameters:
+    -----------
+    images : list of numpy.ndarray
+        List of input images (grayscale or color). If color, they will be converted to grayscale.
+    max_shift : int
+        Maximum allowed shift in pixels (should be power of 2).
+    noise_threshold : int
+        Threshold value for exclusion bitmap to handle noise (pixels within +/- this value of the median).
 
     Returns:
-        Binary threshold bitmap
+    --------
+    list of tuples
+        List of (x, y) integer offsets for each image relative to the reference image (first image).
     """
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-    else:
-        gray = image.astype(np.uint8)
+    if not images:
+        return []
 
-    # Exclude least significant bits to reduce noise
-    if exclude_bits > 0:
-        gray = gray >> exclude_bits << exclude_bits
+    N = len(images)
 
-    # Calculate median value
-    median = np.median(gray)
-
-    # Create binary image
-    return gray >= median
-
-
-def create_exclusion_bitmap(image, exclude_bits=1):
-    """
-    Create exclusion bitmap to ignore noisy pixels near the median value.
-
-    Args:
-        image: Grayscale image
-        exclude_bits: Bits to exclude
-
-    Returns:
-        Exclusion mask where True indicates pixels to include
-    """
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2GRAY)
-    else:
-        gray = image.astype(np.uint8)
-
-    median = np.median(gray)
-    threshold = 2 << (exclude_bits + 1)
-
-    return np.abs(gray.astype(np.int32) - median) > threshold
-
-
-def calculate_shift(tb1, tb2, eb1, eb2, max_shift=16):
-    """
-    Calculate shift between two threshold bitmaps.
-
-    Args:
-        tb1, tb2: Threshold bitmaps
-        eb1, eb2: Exclusion bitmaps
-        max_shift: Maximum allowed shift
-
-    Returns:
-        (x_shift, y_shift) tuple indicating best alignment
-    """
-    best_error = float('inf')
-    best_shift = (0, 0)
-
-    h, w = tb1.shape
-
-    for y in range(-max_shift, max_shift + 1):
-        for x in range(-max_shift, max_shift + 1):
-            # Calculate boundaries for valid comparison area
-            y1, y2 = max(0, y), min(h, h + y)
-            x1, x2 = max(0, x), min(w, w + x)
-
-            # Calculate corresponding boundaries for the shifted image
-            y1s, y2s = max(0, -y), min(h, h - y)
-            x1s, x2s = max(0, -x), min(w, w - x)
-
-            # Extract valid regions for comparison
-            region1_tb = tb1[y1:y2, x1:x2]
-            region2_tb = tb2[y1s:y2s, x1s:x2s]
-
-            region1_eb = eb1[y1:y2, x1:x2]
-            region2_eb = eb2[y1s:y2s, x1s:x2s]
-
-            # Combined exclusion mask
-            combined_mask = region1_eb & region2_eb
-
-            # Calculate error (pixels that don't match)
-            error_map = (region1_tb != region2_tb) & combined_mask
-            error = np.sum(error_map)
-
-            if error < best_error:
-                best_error = error
-                best_shift = (x, y)
-
-    return best_shift
-
-
-def align_image_pyramid(reference, target, max_levels=6, max_shift=16):
-    """
-    Align images using image pyramid for coarse-to-fine alignment.
-
-    Args:
-        reference: Reference image
-        target: Target image to align
-        max_levels: Maximum pyramid levels
-        max_shift: Maximum shift at the coarsest level
-
-    Returns:
-        Aligned target image
-    """
-    # Convert to 8-bit if needed
-    reference_uint8 = reference.astype(
-        np.uint8) if reference.dtype != np.uint8 else reference.copy()
-    target_uint8 = target.astype(
-        np.uint8) if target.dtype != np.uint8 else target.copy()
-
-    # Initialize with no shift
-    shift_x, shift_y = 0, 0
+    # Convert all images to grayscale if necessary
+    gray_images = []
+    for img in images:
+        if len(img.shape) == 3:
+            # Convert to grayscale using the formula from the paper
+            gray = np.round(
+                (54 * img[:, :, 2] + 183 * img[:, :, 1] + 19 * img[:, :, 0]) / 256).astype(np.uint8)
+            gray_images.append(gray)
+        else:
+            gray_images.append(img)
 
     # Create image pyramids
-    ref_pyr = [reference_uint8]
-    target_pyr = [target_uint8]
+    pyramids = []
+    for gray in gray_images:
+        pyramid = [gray]
+        shift_bits = int(np.log2(max_shift))
+        for i in range(shift_bits):
+            pyramid.append(cv2.resize(
+                pyramid[-1], (pyramid[-1].shape[1] // 2, pyramid[-1].shape[0] // 2)))
+        pyramid.reverse()  # Smallest to largest
+        pyramids.append(pyramid)
 
-    # Build pyramid
-    for i in range(max_levels - 1):
-        ref_small = cv2.pyrDown(ref_pyr[-1])
-        target_small = cv2.pyrDown(target_pyr[-1])
+    # Define reference image (first one)
+    ref_pyramid = pyramids[N // 2]
 
-        if min(ref_small.shape[0], ref_small.shape[1]) < 16:
-            break
+    # Calculate offsets for each image relative to the reference
+    offsets = [None] * N
+    offsets[N // 2] = (0, 0)
 
-        ref_pyr.append(ref_small)
-        target_pyr.append(target_small)
+    for i in range(0, len(images)):
+        if i == N // 2:
+            continue
 
-    # Reverse to start from coarsest level
-    ref_pyr.reverse()
-    target_pyr.reverse()
-    current_max_shift = max_shift
+        target_pyramid = pyramids[i]
+        cur_offset = [0, 0]
 
-    # Process pyramid levels
-    for level in range(len(ref_pyr)):
-        # Create threshold and exclusion bitmaps
-        ref_tb = create_median_threshold_bitmap(ref_pyr[level], exclude_bits=1)
-        target_tb = create_median_threshold_bitmap(
-            target_pyr[level], exclude_bits=1)
+        # Process each level of the pyramid
+        for level in range(len(ref_pyramid)):
+            ref_img = ref_pyramid[level]
+            target_img = target_pyramid[level]
 
-        ref_eb = create_exclusion_bitmap(ref_pyr[level], exclude_bits=1)
-        target_eb = create_exclusion_bitmap(target_pyr[level], exclude_bits=1)
+            # Double the offset from the previous level
+            if level > 0:
+                cur_offset[0] *= 2
+                cur_offset[1] *= 2
 
-        # Calculate shift with search centered around current shift
-        dx, dy = calculate_shift(
-            ref_tb, target_tb, ref_eb, target_eb, max_shift=current_max_shift)
+            # Calculate median values
+            ref_median = np.median(ref_img)
+            target_median = np.median(target_img)
 
-        # Update accumulated shift
-        shift_x = shift_x * 2 + dx
-        shift_y = shift_y * 2 + dy
+            # Create threshold bitmaps
+            ref_tb = (ref_img > ref_median).astype(np.uint8)
+            target_tb = (target_img > target_median).astype(np.uint8)
 
-        # Reduce max shift for finer levels
-        current_max_shift = max(1, current_max_shift // 2)
+            # Create exclusion bitmaps
+            ref_eb = (np.abs(ref_img.astype(np.int16) - ref_median)
+                      > noise_threshold).astype(np.uint8)
+            target_eb = (np.abs(target_img.astype(np.int16) -
+                         target_median) > noise_threshold).astype(np.uint8)
 
-    # Apply final shift to original image
-    h, w = reference.shape[:2]
-    M = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
-    aligned_image = cv2.warpAffine(target.astype(np.float32), M, (w, h),
-                                   flags=cv2.INTER_LINEAR,
-                                   borderMode=cv2.BORDER_REPLICATE)
+            # Find the best offset at this level
+            min_err = float('inf')
+            best_dx, best_dy = 0, 0
 
-    return aligned_image, (shift_x, shift_y)
+            for dx in range(-1, 2):
+                for dy in range(-1, 2):
+                    xs = cur_offset[0] + dx
+                    ys = cur_offset[1] + dy
+
+                    # Shift the target bitmaps
+                    M = np.float32([[1, 0, xs], [0, 1, ys]])
+                    shifted_tb = cv2.warpAffine(
+                        target_tb, M, (target_tb.shape[1], target_tb.shape[0]))
+                    shifted_eb = cv2.warpAffine(
+                        target_eb, M, (target_eb.shape[1], target_eb.shape[0]))
+
+                    # Calculate difference between bitmaps
+                    diff_b = cv2.bitwise_xor(ref_tb, shifted_tb)
+
+                    # Apply exclusion bitmaps
+                    diff_b = cv2.bitwise_and(diff_b, ref_eb)
+                    diff_b = cv2.bitwise_and(diff_b, shifted_eb)
+
+                    # Calculate error
+                    err = np.sum(diff_b)
+
+                    if err < min_err:
+                        min_err = err
+                        best_dx, best_dy = xs, ys
+
+            # Update current offset
+            cur_offset[0] = best_dx
+            cur_offset[1] = best_dy
+
+        offsets[i] = (cur_offset[0], cur_offset[1])
+        print(f"Image {i} offset: {offsets[i]}")
+
+    return offsets
 
 
 def align_images(images):
     """
-    Align a list of images using MTB algorithm.
+    Apply calculated offsets to align images.
 
-    Args:
-        images: List of images to align
+    Parameters:
+    -----------
+    images : list of numpy.ndarray
+        List of input images.
+    offsets : list of tuples
+        List of (x, y) offsets for each image.
 
     Returns:
-        List of aligned images
+    --------
+    list of numpy.ndarray
+        Aligned images.
     """
-    if len(images) <= 1:
-        return images
-
-    # Use the middle image as reference
-    reference_idx = len(images) // 2
-    reference = images[reference_idx]
-
     aligned_images = []
+    offsets = align_MTB(images)
 
     for i, img in enumerate(images):
-        if i == reference_idx:
-            aligned_images.append(img)  # Reference image stays the same
-        else:
-            aligned, shift = align_image_pyramid(reference, img)
-            aligned_images.append(aligned)
-            print(f"Image {i} aligned with shift {shift}")
+        offset_x, offset_y = offsets[i]
+
+        # Apply transformation matrix
+        M = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
+        aligned = cv2.warpAffine(img, M, (img.shape[1], img.shape[0]))
+        aligned_images.append(aligned)
 
     return aligned_images

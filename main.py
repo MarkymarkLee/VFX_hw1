@@ -98,22 +98,22 @@ def write_results(images, exposure_times, aligned_images, response_curves, hdr_i
 
 
 def main():
-    data_folder = "data/memorial"
+    data_folder = "data/mine"
 
     # Read images and exposure times
     print("Reading images...")
     images, exposure_times = read_images(data_folder)
 
-    num_samples = int(256 / (len(images) - 1)) + 1 + 5
-
     aligned_images = align_images(images)
 
+    # hdr_image, response_curves = generate_hdr(
+    #     method='paul', images=aligned_images, exposure_times=exposure_times, num_samples=num_samples)
     hdr_image, response_curves = generate_hdr(
-        method='paul', images=images, exposure_times=exposure_times, num_samples=num_samples)
+        method='nayar', images=aligned_images, exposure_times=exposure_times)
 
     # Tone map for display
     print("Tone mapping...")
-    tonemap = cv2.createTonemap(10)
+    tonemap = cv2.createTonemap(5)
     ldrDurand = tonemap.process(hdr_image)
     # tone_mapped = ldrDurand
     tone_mapped = np.clip(ldrDurand * 255, 0, 255).astype('uint8')

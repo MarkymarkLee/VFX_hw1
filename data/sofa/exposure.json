@@ -1,14 +1,14 @@
 {
-    "data/test1/original_4.jpg": 16,
-    "data/test1/original_5.jpg": 32,
-    "data/test1/original_6.jpg": 64,
-    "data/test1/original_7.jpg": 128,
-    "data/test1/original_8.jpg": 256,
-    "data/test1/original_10.jpg": 1024,
-    "data/test1/original_0.jpg": 1,
-    "data/test1/original_1.jpg": 2,
-    "data/test1/original_2.jpg": 4,
-    "data/test1/original_3.jpg": 8,
-    "data/test1/original_9.jpg": 512,
-    "data/test1/original_11.jpg": 2048
+    "original_0.jpg": 0.03125,
+    "original_1.jpg": 0.0625,
+    "original_2.jpg": 0.125,
+    "original_3.jpg": 0.25,
+    "original_4.jpg": 0.5,
+    "original_5.jpg": 1.0,
+    "original_6.jpg": 2.0,
+    "original_7.jpg": 4.0,
+    "original_8.jpg": 8.0,
+    "original_9.jpg": 16.0,
+    "original_10.jpg": 32.0,
+    "original_11.jpg": 64.0
 }

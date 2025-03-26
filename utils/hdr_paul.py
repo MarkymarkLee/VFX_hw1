@@ -66,7 +66,7 @@ def recover_response_curve(images, exposure_times, pixels, lambda_smooth=100):
             k += 1
 
         # Fix the curve by setting its middle value to 0
-        A[k, 128] = 0
+        A[k, 0] = 0
         k += 1
 
         # Solve the system using least squares
@@ -122,6 +122,7 @@ def create_hdr_image(images, exposure_times, response_curves):
 def generate_hdr_paul(images, exposure_times, num_samples=50, lambda_smooth=100):
     """Generate an HDR image using Debevec's method"""
     print("Generating HDR image using Debevec's method...")
+    num_samples = int(256 / (len(images) - 1)) + 1 + 5
     print(f"Number of samples: {num_samples}, Lambda smooth: {lambda_smooth}")
     print("Sampling pixels")
     pixels = sample_pixels(images, num_samples)
