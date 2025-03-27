@@ -66,7 +66,7 @@ def recover_response_curve(images, exposure_times, pixels, lambda_smooth=100):
             k += 1
 
         # Fix the curve by setting its middle value to 0
-        A[k, 0] = 0
+        A[k, 128] = 0
         k += 1
 
         # Solve the system using least squares

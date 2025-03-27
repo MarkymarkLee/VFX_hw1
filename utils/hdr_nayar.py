@@ -1,18 +1,29 @@
 import random
 import numpy as np
-from scipy.optimize import minimize
 
 
 def sample_pixels(images, num_samples=50):
     """Sample pixels from images for response curve recovery without overlapping"""
 
-    height, width, _ = images[0].shape
+    height, width, channel = images[0].shape
+
+    # sample pixels only from points that are increasing in value
+    total_mask = np.ones((height, width), dtype=np.bool)
+    for i in range(len(images) - 1):
+        mask = images[i] < images[i+1]
+        total_mask = np.logical_and(total_mask, np.all(mask, axis=2))
+
+    for i in range(len(images)):
+        mask = images[i] != 0
+        total_mask = np.logical_and(total_mask, np.all(mask, axis=2))
 
     # Create all possible pixel positions
-    all_positions = [(y, x) for y in range(height) for x in range(width)]
+    all_positions = [(y, x) for y in range(height)
+                     for x in range(width) if total_mask[y, x]]
+    print(f"Total possible samples: {len(all_positions)}")
 
     # Calculate max possible unique samples
-    max_possible_samples = height * width
+    max_possible_samples = len(all_positions)
     num_samples = min(num_samples, max_possible_samples)
 
     # Use random.choices to sample without replacement
@@ -31,8 +42,7 @@ def weight_function(z):
     return z_max - z + 1
 
 
-def recover_response_curve(images, exposure_times, pixels, smoothness_lambda=100,
-                           response_n=256, iterations=5):
+def recover_response_curve(images, pixels, max_iterations=500, err_threshold=1e-3):
     """
     Implement Mitsunaga and Nayar's Radiometric Self Calibration method
 
@@ -51,11 +61,10 @@ def recover_response_curve(images, exposure_times, pixels, smoothness_lambda=100
 
     Returns:
     --------
-    hdr_image : numpy array
-        The reconstructed HDR image
     response_curve : numpy array
         The estimated camera response function
     """
+    response_n = 256
     # Ensure images are numpy arrays
     images = [np.array(img) if not isinstance(
         img, np.ndarray) else img for img in images]
@@ -64,11 +73,7 @@ def recover_response_curve(images, exposure_times, pixels, smoothness_lambda=100
     num_images = len(images)
     height, width, channels = images[0].shape
 
-    # Initialize response curve (start with a linear response)
     response_curve = np.zeros((channels, response_n))
-    for i in range(response_n):
-        response_curve[:, i] = np.power(
-            i / (response_n - 1), 2.2)  # Initial gamma=2.2
 
     num_samples = len(pixels)
     # Extract sample pixels from all images
@@ -78,62 +83,105 @@ def recover_response_curve(images, exposure_times, pixels, smoothness_lambda=100
         for j, (x, y) in enumerate(pixels):
             sample_pixels[i, j] = images[i][x, y]
 
-    # For each color channel
-    for c in range(channels):
-        # Iterative optimization
-        for iteration in range(iterations):
-            # Prepare data for optimization
-            Z = sample_pixels[:, :, c]  # Pixel values
+    best_degree = 0
+    best_error = float('inf')
+    best_response_curve = None
+    best_exposures = None
+    # For each degree of response curve
+    for degree in range(3, 7):
+        print(f"Optimizing for degree {degree} polynomial")
+        total_error = 0
+        # For each color channel
+        for c in range(channels):
 
-            # Define the objective function for optimization
-            def objective(response_params):
-                # Reconstruct response curve from parameters
-                # We use polynomial representation as in the paper
+            Z = sample_pixels[:, :, c]  # Pixel values
+            R = np.ones(num_images-1).astype(np.float32) / 2
+            prev_g = np.zeros(256)
+            cur_error = 0
+
+            # Iterative optimization
+            for iteration in range(max_iterations):
+
+                # create linear system
+                A = np.zeros((degree+1, degree+1))
+                B = np.zeros(degree+1)
+
+                table = np.zeros((num_images-1, num_samples, degree))
+                for q in range(num_images - 1):
+                    for p in range(num_samples):
+                        for d in range(degree):
+                            m_pq = Z[q, p] / 255
+                            m_pq1 = Z[q+1, p] / 255
+                            table[q, p, d] = m_pq ** d - R[q] * m_pq1 ** d
+
+                for d in range(degree):
+                    A[d, -1] = -1
+                    # add d_epsilon/d_d = 0 to the system
+                    for q in range(num_images - 1):
+                        for p in range(num_samples):
+                            for dd in range(degree):
+                                A[d, dd] += table[q, p, d] * table[q, p, dd]
+
+                # add sum(x) = 1 to the system
+                A[degree, :-1] = 1
+                B[degree] = 1
+
+                # Solve the system
+                c_n = np.linalg.solve(A, B)[:-1]
+
                 g = np.zeros(response_n)
                 for i in range(response_n):
-                    x = i / (response_n - 1)
-                    g[i] = np.sum([response_params[p] * (x ** p)
-                                  for p in range(len(response_params))])
+                    x = i / 255
+                    g[i] = np.sum([c_n[p] * (x ** p)
+                                   for p in range(len(c_n))])
 
-                # Normalize response curve
-                g = g / g[-1]
+                g = (g - np.min(g) + 0.01) / (np.max(g) - np.min(g))
 
-                # Calculate error term
-                error = 0
-                for i in range(num_samples):
-                    for j in range(num_images - 1):
-                        for k in range(j + 1, num_images):
-                            if Z[j, i] > 0 and Z[k, i] > 0:  # Avoid saturated pixels
-                                error += (g[Z[j, i]] / exposure_times[j] -
-                                          g[Z[k, i]] / exposure_times[k]) ** 2
+                cur_error = 0
+                # Update R with new response curve
+                for j in range(num_images - 1):
+                    p_j = g[Z[j, :]]
+                    p_j1 = g[Z[j+1, :]] + 0.001
+                    R[j] = np.sum(p_j/(p_j1)) / num_samples
+                    cur_error += np.sum(np.power(p_j - R[j] * p_j1, 2))
 
-                # Add smoothness constraint
-                smoothness = 0
-                for i in range(1, response_n - 1):
-                    smoothness += (g[i-1] - 2*g[i] + g[i+1]) ** 2
+                # Update initial parameters for next iteration
+                # initial_params = result.x
+                error = np.abs(g - prev_g)
+                error = error > err_threshold
+                error = np.sum(error)
+                prev_g = g
 
-                return error + smoothness_lambda * smoothness
+                print(
+                    f"Iteration {iteration}, Diff: {error}, error={cur_error}, R={R}", end='\r')
 
-            # Initial parameters (polynomial coefficients)
-            initial_params = np.zeros(5)  # 4th degree polynomial
-            initial_params[1] = 1.0  # Linear term
+                if error == 0:
+                    response_curve[c] = g
+                    exposures = np.ones((channels, num_images))
+                    exposures[0] = 1
+                    for i in range(1, num_images):
+                        exposures[c, i] = R[i-1] / exposures[c, i-1]
+                    exposures = exposures / np.sum(exposures)
 
-            # Optimize
-            result = minimize(objective, initial_params, method='L-BFGS-B')
+                    break
 
-            # Update response curve for this channel
-            for i in range(response_n):
-                x = i / (response_n - 1)
-                response_curve[c, i] = np.sum(
-                    [result.x[p] * (x ** p) for p in range(len(result.x))])
+            total_error += cur_error
 
-            # Normalize
-            response_curve[c, i] = response_curve[c, i] / response_curve[c, -1]
+        if total_error < best_error:
+            best_error = total_error
+            best_degree = degree
+            best_response_curve = response_curve
+            best_exposures = exposures
+            print(f"New best degree: {best_degree}")
 
-    return response_curve
+        print(f"Total error for degree {degree}: {total_error}")
+
+    print(f"Best degree: {best_degree}, Best error: {best_error}")
+
+    return best_response_curve, best_exposures
 
 
-def create_hdr_image(images, exposure_times, response_curves):
+def create_hdr_image(images, exposures, response_curves):
     """Create an HDR image using the recovered response curves"""
     height, width, channels = images[0].shape
     hdr_image = np.zeros(
@@ -143,8 +191,34 @@ def create_hdr_image(images, exposure_times, response_curves):
     weight_sum = np.zeros(
         (height, width, channels), dtype=np.float32)
 
+    M = np.array(images).astype(np.uint8)
+
+    M_r = M[:, :, :, 0].flatten()
+    M_g = M[:, :, :, 1].flatten()
+    M_b = M[:, :, :, 2].flatten()
+
+    I_r = response_curves[0][M_r]
+    I_g = response_curves[1][M_g]
+    I_b = response_curves[2][M_b]
+
+    # Calculate sums for robust ratio estimation
+    sum_MrIg = np.sum(M_r * I_g)
+    sum_MgIr = np.sum(M_g * I_r)
+    sum_MbIg = np.sum(M_b * I_g)
+    sum_MgIb = np.sum(M_g * I_b)
+
+    eps = 1e-8
+
+    # Calculate relative scales s_r = kr/kg, s_b = kb/kg
+    s_r = sum_MrIg / (sum_MgIr + eps)
+    s_b = sum_MbIg / (sum_MgIb + eps)
+
+    # Return scales relative to Green (G scale = 1.0)
+    scales = np.array([s_r, 1.0, s_b], dtype=np.float32)
+    print(f"Calculated color scales (R, G, B relative to G): {scales}")
+    color_scale = scales / np.sum(scales)
+
     for i, image in enumerate(images):
-        delta_t = np.log(exposure_times[i])
 
         for c in range(3):
             # RGB
@@ -152,41 +226,36 @@ def create_hdr_image(images, exposure_times, response_curves):
 
             # Convert pixel values to log radiance
             channel_data = image[:, :, c].astype(int)
-            weights = np.array([weight_function(z) for z in range(256)])
+            weights = np.array([weight_function(z)
+                               for z in range(256)])
             pixel_weights = weights[channel_data]
 
-            # Get log radiance using the response curve
-            log_radiance = response_curve[channel_data]
-
-            # Adjusted for the exposure time
-            log_radiance -= delta_t
+            radiance = response_curve[channel_data]
 
             # Add weighted radiance to the HDR image
-            hdr_image[:, :, c] += pixel_weights * log_radiance
-
+            hdr_image[:, :, c] += pixel_weights * \
+                radiance / exposures[c][i] * color_scale[c]
             weight_sum[:, :, c] += pixel_weights
 
     # Get the weighted average
     eps = np.finfo(np.float32).eps  # To avoid division by zero
     hdr_image = hdr_image / (weight_sum + eps)
 
-    # Convert from log domain to linear
-    hdr_image = np.exp(hdr_image)
-
     return hdr_image
 
 
-def generate_hdr_nayar(images, exposure_times, num_samples=50):
+def generate_hdr_nayar(images, num_samples=1000):
     """Generate an HDR image using Nayar's method"""
     print("Generating HDR image using Nayar's method...")
     max_samples = images[0].shape[0] * images[0].shape[1]
     num_samples = min(num_samples, max_samples)
+
     print("Sampling pixels")
     pixels = sample_pixels(images, num_samples)
-    print(f"Recovering response curves with {num_samples} samples")
-    response_curves = recover_response_curve(
-        images, exposure_times, pixels)
+    print(f"Recovering response curves with {len(pixels)} samples")
+    response_curves, exposures = recover_response_curve(
+        images, pixels)
     print("Creating HDR image")
     hdr_image = create_hdr_image(
-        images, exposure_times, response_curves)
+        images, exposures, response_curves)
     return hdr_image, response_curves
