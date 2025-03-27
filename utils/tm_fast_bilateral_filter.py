@@ -55,10 +55,8 @@ def fast_bilateral_filter_channel(
     max_val = np.max(channel)
     val_range = max(max_val - min_val, 1e-6)  # Avoid zero range
     num_segments = int(val_range / sigma_r)
-    # num_segments = 500
+    num_segments = max(num_segments, 100)  # Ensure at least one segment
     segment_width = val_range / num_segments
-
-    print(num_segments, segment_width)
 
     # --- Downsampling ---
     # Use INTER_AREA for downsampling to minimize aliasing
@@ -110,6 +108,7 @@ def fast_bilateral_filter_channel(
         # J = J + J^j * InterpolationWeight(I, i^j)
         J_final += J_j * 1 / num_segments
 
+    print()
     return J_final.astype(np.float32)
 
 
@@ -141,7 +140,6 @@ def fast_bilateral_tonemap(
             hdr_image.dtype).max if hdr_image.dtype != np.float32 else hdr_image.astype(np.float32)
 
     if hdr_image.ndim == 3 and hdr_image.shape[2] == 3:
-        print("Processing color image (RGB channels independently)...")
         # Process luminance only by converting to HSV
         # Convert RGB to HSV space
         hsv_image = cv2.cvtColor(hdr_image, cv2.COLOR_RGB2HSV)
@@ -149,14 +147,10 @@ def fast_bilateral_tonemap(
         # Extract channels
         h_channel, s_channel, v_channel = cv2.split(hsv_image)
 
-        show_channel("v_channel", v_channel)
-
         # Apply bilateral filter only to the Value (luminance) channel
         filtered_v_channel = fast_bilateral_filter_channel(
             v_channel, sigma_s, sigma_r, z
         )
-
-        show_channel("filtered_v_channel", filtered_v_channel)
 
         filtered_hsv = cv2.merge((h_channel, s_channel, filtered_v_channel))
         # Convert back to RGB

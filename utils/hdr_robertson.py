@@ -86,7 +86,7 @@ def recover_response_curve(images, exposure_times, pixels, max_iterations=1000, 
                 print(f"\nConverged after {i+1} iterations")
                 break
 
-        g = np.log(g)
+        g = np.log(g+1e-8)
         response_curves.append(g)
 
     return response_curves
@@ -135,7 +135,7 @@ def create_hdr_image(images, exposure_times, response_curves):
     return hdr_image
 
 
-def generate_hdr_robertson(images, exposure_times, num_samples=100000):
+def generate_hdr_robertson(images, exposure_times, num_samples=50000):
     """Generate an HDR image using Robertson's method"""
     print("Generating HDR image using Robertson's method...")
     max_samples = images[0].shape[0] * images[0].shape[1]
@@ -148,4 +148,6 @@ def generate_hdr_robertson(images, exposure_times, num_samples=100000):
     print("Creating HDR image")
     hdr_image = create_hdr_image(
         images, exposure_times, response_curves)
+    response_curves = np.array(response_curves)
+    response_curves = response_curves[:, 1:]
     return hdr_image, response_curves
