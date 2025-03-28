@@ -1,4 +1,5 @@
 第 17 組： B10902032 李沛宸
+Github: https://github.com/MarkymarkLee/VFX_hw1.git
 ## 1. Comparing Different Results
 
 ### 1.1 Comparison of HDR Methods using Fast Bilateral Filtering
