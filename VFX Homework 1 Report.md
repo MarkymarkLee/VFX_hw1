@@ -56,6 +56,8 @@ However, fast bilateral filtering needs the most time and may differ by how larg
 6. **Subpixel Alignment**: Apply the computed offset to align all images with the reference image
     - Construct a system of equations based on pixel values and exposures
 
+Aligned Images
+![[hw1/results/nayar/dragor/images.jpg]]
 ### 2.2 HDR Algorithms
 
 #### Paul Debevec Method
