@@ -38,7 +38,7 @@ def write_results(result_dir, images, exposure_times, response_curves, hdr_image
         os.makedirs(result_dir)
 
     # 1. Plot response curves
-    plt.figure(figsize=(10, 4))
+    plt.figure(figsize=(4, 3))
     for i, channel in enumerate(['r', 'g', 'b']):
         rc_len = len(response_curves[i])
         plt.plot(response_curves[i], range(256 - rc_len, 256), color=channel)
