@@ -102,9 +102,9 @@ Implements an efficient bilateral filter for edge-preserving smoothing, preservi
 
 ## Results
 
-Output files are stored in the `results/` directory:
+Output files are stored in the result directory:
 
 -   `hdr_image.hdr` - Raw HDR image
 -   `result.jpg` - Tone-mapped result for display
 -   `response_curve.jpg` - Plot of recovered camera response curves
--   `original_images.jpg` - Visualization of input images
+-   `original_images.jpg` - Visualization of input images (may be aligned or not)

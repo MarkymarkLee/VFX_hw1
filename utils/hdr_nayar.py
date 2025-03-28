@@ -42,7 +42,7 @@ def weight_function(z):
     return z_max - z + 1
 
 
-def recover_response_curve(images, pixels, max_iterations=500, err_threshold=1e-3):
+def recover_response_curve(images, pixels, max_iterations=500, err_threshold=1e-2):
     """
     Implement Mitsunaga and Nayar's Radiometric Self Calibration method
 
@@ -135,15 +135,18 @@ def recover_response_curve(images, pixels, max_iterations=500, err_threshold=1e-
                     g[i] = np.sum([c_n[p] * (x ** p)
                                    for p in range(len(c_n))])
 
-                g = (g - np.min(g) + 0.01) / (np.max(g) - np.min(g))
+                # g = (g - np.min(g) + 0.01) / (np.max(g) - np.min(g))
 
                 cur_error = 0
                 # Update R with new response curve
                 for j in range(num_images - 1):
                     p_j = g[Z[j, :]]
-                    p_j1 = g[Z[j+1, :]] + 0.001
-                    R[j] = np.sum(p_j/(p_j1)) / num_samples
+                    p_j1 = g[Z[j+1, :]]
                     cur_error += np.sum(np.power(p_j - R[j] * p_j1, 2))
+                    mask = p_j1 != 0
+                    p_j1 = p_j1[mask]
+                    p_j = p_j[mask]
+                    R[j] = np.sum(p_j/p_j1) / num_samples
 
                 # Update initial parameters for next iteration
                 # initial_params = result.x
@@ -161,7 +164,8 @@ def recover_response_curve(images, pixels, max_iterations=500, err_threshold=1e-
                     exposures[0] = 1
                     for i in range(1, num_images):
                         exposures[c, i] = R[i-1] / exposures[c, i-1]
-                    exposures = exposures / np.sum(exposures)
+                    # exposures = exposures / np.sum(exposures)
+                    print(f"Channel {c}, R={R}" + " " * 50)
 
                     break
 
@@ -235,7 +239,7 @@ def create_hdr_image(images, exposures, response_curves):
             # Add weighted radiance to the HDR image
             hdr_image[:, :, c] += pixel_weights * \
                 radiance / exposures[c][i] * color_scale[c]
-            weight_sum[:, :, c] += pixel_weights
+            weight_sum[:, :, c] += pixel_weights * color_scale[c]
 
     # Get the weighted average
     eps = np.finfo(np.float32).eps  # To avoid division by zero
